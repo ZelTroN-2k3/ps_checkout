@@ -49,3 +49,11 @@ services:
   ps_checkout.presenter.transaction:
     class: 'PrestaShop\Module\PrestashopCheckout\Presenter\Transaction\TransactionPresenter'
     public: true
+
+  ps_checkout.paymentoptions.factory:
+    class: 'PrestaShop\Module\PrestashopCheckout\PaymentOptions\PaymentOptionsFactory'
+    public: true
+
+  ps_checkout.paymentoptions.provider:
+    class: 'PrestaShop\Module\PrestashopCheckout\PaymentOptions\PaymentOptionsProvider'
+    public: true

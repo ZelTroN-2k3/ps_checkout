@@ -109,7 +109,7 @@ class Ps_checkout extends PaymentModule
 
     // Needed in order to retrieve the module version easier (in api call headers) than instanciate
     // the module each time to get the version
-    const VERSION = '2.0.8';
+    const VERSION = '2.0.6';
 
     const INTEGRATION_DATE = '2020-07-30';
 
@@ -130,7 +130,7 @@ class Ps_checkout extends PaymentModule
 
         // We cannot use the const VERSION because the const is not computed by addons marketplace
         // when the zip is uploaded
-        $this->version = '2.0.8';
+        $this->version = '2.0.6';
         $this->author = 'PrestaShop';
         $this->need_instance = 0;
         $this->currencies = true;
@@ -411,8 +411,21 @@ class Ps_checkout extends PaymentModule
             return '';
         }
 
+        /** @var \PrestaShop\Module\PrestashopCheckout\Repository\PaypalAccountRepository $paypalAccountRepository */
+        $paypalAccountRepository = $this->getService('ps_checkout.repository.paypal.account');
+
+        /** @var \PrestaShop\Module\PrestashopCheckout\FundingSource\FundingSourceProvider $fundingSourceProvider */
+        $fundingSourceProvider = $this->getService('ps_checkout.funding_source.provider');
+        $paymentOptions = [];
+
+        foreach ($fundingSourceProvider->getAll() as $fundingSource) {
+            $paymentOptions[$fundingSource->name] = $fundingSource->label;
+        }
+
         $this->context->smarty->assign([
             'modulePath' => $this->getPathUri(),
+            'paymentOptions' => $paymentOptions,
+            'isHostedFieldsAvailable' => $paypalAccountRepository->cardHostedFieldsIsAvailable(),
         ]);
 
         return $this->display(__FILE__, '/views/templates/hook/displayPayment.tpl');
@@ -437,21 +450,32 @@ class Ps_checkout extends PaymentModule
             return [];
         }
 
-        /** @var \PrestaShop\Module\PrestashopCheckout\FundingSourceProvider $fundingSourceProvider */
-        $fundingSourceProvider = $this->getService('ps_checkout.provider.funding_source');
-        $paymentOptionNames = $fundingSourceProvider->getPaymentOptionNames();
+        /** @var \PrestaShop\Module\PrestashopCheckout\Repository\PaypalAccountRepository $paypalAccountRepository */
+        $paypalAccountRepository = $this->getService('ps_checkout.repository.paypal.account');
 
-        $this->context->smarty->assign([
-            'modulePath' => $this->getPathUri(),
-        ]);
+        /** @var \PrestaShop\Module\PrestashopCheckout\Repository\PaypalAccountRepository $paypalAccountRepository */
+        $paypalAccountRepository = $this->getService('ps_checkout.repository.paypal.account');
 
-        $paymentOption = new PrestaShop\PrestaShop\Core\Payment\PaymentOption();
-        $paymentOption->setModuleName($this->name);
-        $paymentOption->setCallToActionText($paymentOptionNames['paypal']);
-        $paymentOption->setBinary(true);
-        $paymentOption->setAdditionalInformation($this->display(__FILE__, '/views/templates/hook/paymentOptionButtonsAdditionalInformation.tpl'));
+        /** @var \PrestaShop\Module\PrestashopCheckout\FundingSource\FundingSourceProvider $fundingSourceProvider */
+        $fundingSourceProvider = $this->getService('ps_checkout.funding_source.provider');
 
-        return [$paymentOption];
+        $paymentOptions = [];
+
+        foreach ($fundingSourceProvider->getAll() as $fundingSource) {
+            $paymentOption = new PrestaShop\PrestaShop\Core\Payment\PaymentOption();
+            $paymentOption->setModuleName($this->name . '-' . $fundingSource->name);
+            $paymentOption->setCallToActionText($fundingSource->label);
+            $paymentOption->setBinary(true);
+
+            if ('card' === $fundingSource->name) {
+                $this->context->smarty->assign('modulePath', $this->getPathUri());
+                $paymentOption->setForm($this->context->smarty->fetch('module:ps_checkout/views/templates/hook/paymentOptions.tpl'));
+            }
+
+            $paymentOptions[] = $paymentOption;
+        }
+
+        return $paymentOptions;
     }
 
     /**
@@ -574,14 +598,10 @@ class Ps_checkout extends PaymentModule
         $ppAccountRepository = $this->getService('ps_checkout.repository.paypal.account');
         /** @var \PrestaShop\Module\PrestashopCheckout\Repository\PsAccountRepository $psAccountRepository */
         $psAccountRepository = $this->getService('ps_checkout.repository.prestashop.account');
-        /** @var \PrestaShop\Module\PrestashopCheckout\Context\PrestaShopContext $psContext */
-        $psContext = $this->getService('ps_checkout.context.prestashop');
-        $shopUuid = (new PrestaShop\Module\PrestashopCheckout\ShopUuidManager())->getForShop((int) $psContext->getShopId());
 
         return $ppAccountRepository->onBoardingIsCompleted()
             && $ppAccountRepository->paypalEmailIsValid()
-            && $psAccountRepository->onBoardingIsCompleted()
-            && $shopUuid;
+            && $psAccountRepository->onBoardingIsCompleted();
     }
 
     /**
@@ -609,8 +629,8 @@ class Ps_checkout extends PaymentModule
         /** @var \PrestaShop\Module\PrestashopCheckout\PayPal\PayPalConfiguration $payPalConfiguration */
         $payPalConfiguration = $this->getService('ps_checkout.paypal.configuration');
 
-        /** @var \PrestaShop\Module\PrestashopCheckout\FundingSourceProvider $fundingSourceProvider */
-        $fundingSourceProvider = $this->getService('ps_checkout.provider.funding_source');
+        /** @var \PrestaShop\Module\PrestashopCheckout\FundingSource\FundingSourceTranslationProvider $fundingSourceTranslationProvider */
+        $fundingSourceTranslationProvider = $this->getService('ps_checkout.funding_source.translation');
 
         // BEGIN To be refactored in services
         $payPalClientToken = '';
@@ -662,7 +682,7 @@ class Ps_checkout extends PaymentModule
             $this->name . '3dsEnabled' => $payPalConfiguration->is3dSecureEnabled(),
             $this->name . 'CspNonce' => $payPalConfiguration->getCSPNonce(),
             $this->name . 'FundingSourcesSorted' => $payPalConfiguration->getFundingSources(),
-            $this->name . 'PayWithTranslations' => $fundingSourceProvider->getPaymentOptionNames(),
+            $this->name . 'PayWithTranslations' => $fundingSourceTranslationProvider->getPaymentOptionNames(),
             $this->name . 'CheckoutTranslations' => [
                 'checkout.go.back.link.title' => $this->l('Go back to the Checkout'),
                 'checkout.go.back.label' => $this->l('Checkout'),
@@ -1112,8 +1132,16 @@ class Ps_checkout extends PaymentModule
             return '';
         }
 
+        /** @var \PrestaShop\Module\PrestashopCheckout\FundingSource\FundingSourceProvider $fundingSourceProvider */
+        $fundingSourceProvider = $this->getService('ps_checkout.funding_source.provider');
+        $paymentOptions = [];
+
+        foreach ($fundingSourceProvider->getAll() as $fundingSource) {
+            $paymentOptions[] = $fundingSource->name;
+        }
+
         $this->context->smarty->assign([
-            'moduleName' => $this->name,
+            'paymentOptions' => $paymentOptions,
         ]);
 
         return $this->display(__FILE__, '/views/templates/hook/displayPaymentByBinaries.tpl');
@@ -1126,13 +1154,9 @@ class Ps_checkout extends PaymentModule
     {
         // We want to track only event appends on PrestaShop BO
         if (defined('_PS_ADMIN_DIR_')) {
-            try {
-                /** @var \PrestaShop\Module\PrestashopCheckout\Segment\SegmentTracker $tracker */
-                $tracker = $this->getService('ps_checkout.segment.tracker');
-                $tracker->track($action);
-            } catch (Exception $exception) {
-                // Sometime on module enable after an upgrade .env data are not loaded
-            }
+            /** @var \PrestaShop\Module\PrestashopCheckout\Segment\SegmentTracker $tracker */
+            $tracker = $this->getService('ps_checkout.segment.tracker');
+            $tracker->track($action);
         }
     }
 }
